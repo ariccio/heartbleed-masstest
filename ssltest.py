@@ -3,8 +3,8 @@
 # Quick and dirty demonstration of CVE-2014-0160 by Jared Stafford (jspenguin@jspenguin.org)
 # The author disclaims copyright to this source code.
 
-# Quickly and dirtily modified by Mustafa Al-Bassam (mus@musalbas.com) to test
-# the Alexa top X.
+# Quickly and dirtily modified by Mustafa Al-Bassam (mus@musalbas.com) to test the Alexa top X.
+#     modified by Alexander Riccio (alexander@riccio.com) to test multiple domains in parallel
 
 # Usage example: python ssltest.py top-1m.csv 10
 
