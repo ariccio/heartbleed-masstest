@@ -15,6 +15,8 @@ import time
 import select
 import re
 from optparse import OptionParser
+import Queue as queue
+import threading
 
 options = OptionParser(usage='%prog file max', description='Test for SSL heartbleed vulnerability (CVE-2014-0160) on multiple domains, takes in Alexa top X CSV file')
 
@@ -139,40 +141,152 @@ def is_vulnerable(domain):
     s.send(hb)
     return hit_hb(s)
 
-def main():
-    opts, args = options.parse_args()
-    if len(args) < 2:
-        options.print_help()
-        return
-
+def single_threaded_main(args):
     counter_nossl = 0;
     counter_notvuln = 0;
     counter_vuln = 0;
 
-    f = open(args[0], 'r')
-    for line in f:
-        rank, domain = line.split(',')
-        domain = domain.strip()
-        print "Testing " + domain + "... ",
-        sys.stdout.flush();
-        result = is_vulnerable(domain);
-        if result is None:
-            print "no SSL."
-            counter_nossl += 1;
-        elif result:
-            print "vulnerable."
-            counter_vuln += 1;
-        else:
-            print "not vulnerable."
-            counter_notvuln += 1;
+    with open(args[0], 'r') as f:
+        for line in f:
+            rank, domain = line.split(',')
+            domain = domain.strip()
+            print "Testing %s... " % domain,
+            sys.stdout.flush();
+            result = is_vulnerable(domain);
+            if result is None:
+                print "no SSL."
+                counter_nossl += 1;
+            elif result:
+                print "vulnerable."
+                counter_vuln += 1;
+            else:
+                print "not vulnerable."
+                counter_notvuln += 1;
 
-        if int(rank) >= int(args[1]):
-            break
+            if int(rank) >= int(args[1]):
+                break
 
     print
     print "No SSL: " + str(counter_nossl)
     print "Vulnerable: " + str(counter_vuln)
     print "Not vulnerable: " + str(counter_notvuln)
+
+
+
+class aScanner(threading.Thread):
+    def __init__(self, queue_of_domains_to_check, counter_nossl, counter_notvuln, counter_vuln, limit):
+        threading.Thread.__init__(self)
+        self.queue_of_domains_to_check = queue_of_domains_to_check
+        self.counter_nossl = counter_nossl
+        self.counter_notvuln = counter_notvuln
+        self.counter_vuln  = counter_vuln
+        self.limit = limit
+    def run( self ):
+        try:
+            while True:
+                try:
+                    aDomain = self.queue_of_domains_to_check.get(timeout=1)
+                    if aDomain:
+                        #print "Testing %s... " % aDomain
+                        sys.stdout.flush();
+                        result = is_vulnerable(aDomain);
+                        if result is None:
+                            print "%s no SSL." % aDomain
+                            self.counter_nossl += 1;
+                        elif result:
+                            print "%s vulnerable." % aDomain
+                            self.counter_vuln += 1;
+                        else:
+                            print "%s not vulnerable." % aDomain
+                            self.counter_notvuln += 1;
+
+                        if self.counter_nossl + self.counter_vuln + self.counter_notvuln >= self.limit:
+                            break
+                except KeyboardInterrupt:
+                    sys.exit("aborted by KeyboardInterrupt!")
+                
+        except queue.Empty:
+            pass
+
+        except KeyboardInterrupt:
+            sys.exit("aborted by KeyboardInterrupt!")
+        print
+        print "No SSL: " + str(counter_nossl)
+        print "Vulnerable: " + str(counter_vuln)
+        print "Not vulnerable: " + str(counter_notvuln)
+
+
+
+
+
+def populate_queue_with_domains_from_file(fileName, theQueue):
+    with open(fileName, 'r') as f:
+        for line in f:
+            try:
+                rank, domain = line.split(',')
+                domain = domain.strip()
+                theQueue.put(domain)
+            except ValueError:
+                print domain
+
+def multi_threaded_main(args):
+    counter_nossl = 0;
+    counter_notvuln = 0;
+    counter_vuln = 0;
+
+##
+##    with open(args[0], 'r') as f:
+##        for line in f:
+##            rank, domain = line.split(',')
+##            domain = domain.strip()
+    theQueue = queue.Queue()
+    populate_queue_with_domains_from_file(args[0], theQueue)
+    threads = []
+    numThreads = 1000
+    limit = int(args[1])
+    [threads.append(aScanner(theQueue, counter_nossl, counter_notvuln, counter_vuln, limit)) for _ in range(numThreads)]
+    [thread.start() for thread in threads]
+    
+##    try:
+##        while True:
+##            aDomain = theQueue.get(timeout=1)
+##            if aDomain:
+##                print "Testing %s... " % aDomain,
+##                sys.stdout.flush();
+##                result = is_vulnerable(aDomain);
+##                if result is None:
+##                    print "no SSL."
+##                    counter_nossl += 1;
+##                elif result:
+##                    print "vulnerable."
+##                    counter_vuln += 1;
+##                else:
+##                    print "not vulnerable."
+##                    counter_notvuln += 1;
+##
+##                if counter_nossl + counter_vuln + counter_notvuln >= int(args[1]):
+##                    break
+##
+##            
+##    except queue.Empty:
+##        pass
+##
+##
+##    print
+##    print "No SSL: " + str(counter_nossl)
+##    print "Vulnerable: " + str(counter_vuln)
+##    print "Not vulnerable: " + str(counter_notvuln)
+
+
+
+
+def main():
+    opts, args = options.parse_args()
+    if len(args) < 2:
+        options.print_help()
+        return
+    #single_threaded_main(args)
+    multi_threaded_main(args)
 
 if __name__ == '__main__':
     main()
