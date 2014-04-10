@@ -17,8 +17,15 @@ import re
 from optparse import OptionParser
 import Queue as queue
 import threading
+try:
+    from colorama import init, Fore
+    init(autoreset=True)
+    NO_COLORAMA = False
+except ImportError:
+    NO_COLORAMA = True
+    print "Install colorama for coloring!"
 
-options = OptionParser(usage='%prog file max', description='Test for SSL heartbleed vulnerability (CVE-2014-0160) on multiple domains, takes in Alexa top X CSV file')
+options = OptionParser(usage='%prog file max numthreads', description='Test for SSL heartbleed vulnerability (CVE-2014-0160) on multiple domains, takes in Alexa top X CSV file')
 
 def h2bin(x):
     return x.replace(' ', '').replace('\n', '').decode('hex')
@@ -174,46 +181,61 @@ def single_threaded_main(args):
 
 
 class aScanner(threading.Thread):
-    def __init__(self, queue_of_domains_to_check, counter_nossl, counter_notvuln, counter_vuln, limit):
+    def __init__(self, queue_of_domains_to_check, counter_nossl, counter_notvuln, counter_vuln, limit, vulnQueue):
         threading.Thread.__init__(self)
         self.queue_of_domains_to_check = queue_of_domains_to_check
-        self.counter_nossl = counter_nossl
-        self.counter_notvuln = counter_notvuln
-        self.counter_vuln  = counter_vuln
+        #self.counter_nossl = counter_nossl
+        #self.counter_notvuln = counter_notvuln
+        #self.counter_vuln  = counter_vuln
         self.limit = limit
+        self.vulnQueue = vulnQueue
     def run( self ):
+        counter = 0
         try:
             while True:
-                try:
                     aDomain = self.queue_of_domains_to_check.get(timeout=1)
                     if aDomain:
                         #print "Testing %s... " % aDomain
-                        sys.stdout.flush();
+                        sys.stdout.flush()
                         result = is_vulnerable(aDomain);
                         if result is None:
-                            print "%s no SSL." % aDomain
-                            self.counter_nossl += 1;
-                        elif result:
-                            print "%s vulnerable." % aDomain
-                            self.counter_vuln += 1;
-                        else:
-                            print "%s not vulnerable." % aDomain
-                            self.counter_notvuln += 1;
+                            sys.stdout.flush()
+                            print "no SSL:         %s||" % aDomain
+##                            self.counter_nossl += 1
+                            #counter_nossl += 1
 
-                        if self.counter_nossl + self.counter_vuln + self.counter_notvuln >= self.limit:
-                            break
-                except KeyboardInterrupt:
-                    sys.exit("aborted by KeyboardInterrupt!")
+                        elif result:
+                            self.vulnQueue.put(aDomain)
+                            sys.stdout.flush()
+                            if NO_COLORAMA:
+                                print "vulnerable:     %s||" % aDomain
+                                #self.counter_vuln += 1
+                                #counter_vuln += 1
+                            else:
+                                sys.stdout.flush()
+                                print Fore.RED, "vulnerable:     %s||" % aDomain
+                                #self.counter_vuln += 1
+                                #counter_vuln += 1
+                        else:
+                            sys.stdout.flush()
+                            print "not vulnerable: %s||" % aDomain
+                            #self.counter_notvuln += 1
+                            #counter_notvuln += 1
+                        sys.stdout.flush()
+                        #if self.counter_nossl + self.counter_vuln + self.counter_notvuln >= self.limit:
+                        if counter >= self.limit:
+                            return
+                        else:
+                            counter += 1
+                            #print "DEBUG: noSSL: %i VULN: %i NOTvuln: %i" % (self.counter_nossl, self.counter_vuln, self.counter_notvuln)
                 
         except queue.Empty:
             pass
 
-        except KeyboardInterrupt:
-            sys.exit("aborted by KeyboardInterrupt!")
-        print
-        print "No SSL: " + str(counter_nossl)
-        print "Vulnerable: " + str(counter_vuln)
-        print "Not vulnerable: " + str(counter_notvuln)
+        #print
+        #print "No SSL: " + str(counter_nossl)
+        #print "Vulnerable: " + str(counter_vuln)
+        #print "Not vulnerable: " + str(counter_notvuln)
 
 
 
@@ -227,9 +249,10 @@ def populate_queue_with_domains_from_file(fileName, theQueue):
                 domain = domain.strip()
                 theQueue.put(domain)
             except ValueError:
-                print domain
+                print "Bad domain! %s" % domain
 
-def multi_threaded_main(args):
+def multi_threaded_main(options, args):
+    print "|| signifies end of line, hack to deal with multithreaded printing"
     counter_nossl = 0;
     counter_notvuln = 0;
     counter_vuln = 0;
@@ -240,13 +263,21 @@ def multi_threaded_main(args):
 ##            rank, domain = line.split(',')
 ##            domain = domain.strip()
     theQueue = queue.Queue()
+    vulnQueue = queue.Queue()
     populate_queue_with_domains_from_file(args[0], theQueue)
     threads = []
-    numThreads = 1000
+    numThreads = int(args[2])
     limit = int(args[1])
     [threads.append(aScanner(theQueue, counter_nossl, counter_notvuln, counter_vuln, limit)) for _ in range(numThreads)]
     [thread.start() for thread in threads]
-    
+    [thread.join() for thread in threads]
+    try:
+        print "Vulnerable domains:"
+        while True:
+            a_vulnerable_domain = vulnQueue.get()
+            print a_vulnerable_domain
+    except queue.Empty:
+        pass
 ##    try:
 ##        while True:
 ##            aDomain = theQueue.get(timeout=1)
@@ -282,11 +313,11 @@ def multi_threaded_main(args):
 
 def main():
     opts, args = options.parse_args()
-    if len(args) < 2:
+    if len(args) < 3:
         options.print_help()
         return
     #single_threaded_main(args)
-    multi_threaded_main(args)
+    multi_threaded_main(opts, args)
 
 if __name__ == '__main__':
     main()
