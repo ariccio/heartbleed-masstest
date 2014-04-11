@@ -87,14 +87,14 @@ def recvall(s, length, timeout=5):
 def recvmsg(s):
     hdr = recvall(s, 5)
     if hdr is None:
-        logging.debug('Unexpected EOF receiving record header - server closed connection')
+        logging.debug('\t\tUnexpected EOF receiving record header - server closed connection')
         return None, None, None
     typ, ver, ln = struct.unpack('>BHH', hdr)
     pay = recvall(s, ln, 10)
     if pay is None:
-        logging.debug('Unexpected EOF receiving record payload - server closed connection')
+        logging.debug('\t\tUnexpected EOF receiving record payload - server closed connection')
         return None, None, None
-    logging.debug(' ... received message: type = %d, ver = %04x, length = %d' % (typ, ver, len(pay)))
+    logging.debug('\t\t received message: type = %d, ver = %04x, length = %d' % (typ, ver, len(pay)))
     return typ, ver, pay
 
 def hit_hb(s):
@@ -102,74 +102,76 @@ def hit_hb(s):
     while True:
         typ, ver, pay = recvmsg(s)
         if typ is None:
-            logging.debug('No heartbeat response received, server likely not vulnerable')
+            logging.debug('\t\tNo heartbeat response received, server likely not vulnerable')
             return False
 
         if typ == 24:
-            logging.debug('Received heartbeat response:')
+            logging.debug('\t\tReceived heartbeat response:')
             hexdump(pay)
             if len(pay) > 3:
-                logging.debug('WARNING: server returned more data than it should - server is vulnerable!')
+                logging.debug('\t\tWARNING: server returned more data than it should - server is vulnerable!')
                 return True
             else:
-                logging.debug('Server processed malformed heartbeat, but did not return any extra data.')
+                logging.debug('\t\tServer processed malformed heartbeat, but did not return any extra data.')
                 return False
 
         if typ == 21:
-            logging.debug('Received alert:')
+            logging.debug('\t\tReceived alert:')
             hexdump(pay)
-            logging.debug('Server returned error, likely not vulnerable')
+            logging.debug('\t\tServer returned error, likely not vulnerable')
             return False
 
 def is_vulnerable(domain):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(2)
-    logging.debug('Connecting to %s...' % domain)
+    logging.debug('\tConnecting to %s...' % domain)
     sys.stdout.flush()
     try:
         s.connect((domain, 443))
+    except KeyboardInterrupt:
+        sys.exit()
     except Exception, e:
         return None
-    logging.debug('Sending Client Hello to %s...' % domain)
+    logging.debug('\tSending Client Hello to %s...' % domain)
     sys.stdout.flush()
     s.send(hello)
-    logging.debug('Waiting for Server Hello from %s...' % domain)
+    logging.debug('\tWaiting for Server Hello from %s...' % domain)
     sys.stdout.flush()
     while True:
         typ, ver, pay = recvmsg(s)
-        if typ == None:
-            logging.debug('Server (domain: %s) closed connection without sending Server Hello.' % domain)
+        if typ is None:
+            logging.debug('\tServer (domain: %s) closed connection without sending Server Hello.' % domain)
             return None
         # Look for server hello done message.
         if typ == 22 and ord(pay[0]) == 0x0E:
             break
 
-    logging.debug('Sending heartbeat request to %s...' % domain)
+    logging.debug('\tSending heartbeat request to %s...' % domain)
     sys.stdout.flush()
     s.send(hb)
     return hit_hb(s)
 
 def single_threaded_main(args):
-    counter_nossl = 0;
-    counter_notvuln = 0;
-    counter_vuln = 0;
+    counter_nossl = 0
+    counter_notvuln = 0
+    counter_vuln = 0
 
     with open(args[0], 'r') as f:
         for line in f:
             rank, domain = line.split(',')
             domain = domain.strip()
             print "Testing %s... " % domain,
-            sys.stdout.flush();
-            result = is_vulnerable(domain);
+            sys.stdout.flush()
+            result = is_vulnerable(domain)
             if result is None:
                 print "no SSL."
-                counter_nossl += 1;
+                counter_nossl += 1
             elif result:
                 print "vulnerable."
-                counter_vuln += 1;
+                counter_vuln += 1
             else:
                 print "not vulnerable."
-                counter_notvuln += 1;
+                counter_notvuln += 1
 
             if int(rank) >= int(args[1]):
                 break
@@ -200,15 +202,15 @@ class aScanner(threading.Thread):
             while self.do_work:
                     aDomain = self.queue_of_domains_to_check.get(timeout=1)
                     if aDomain:
-                        logging.debug("Testing %s... " % aDomain)
+                        logging.debug("\tTesting %s... " % aDomain)
                         sys.stdout.flush()
-                        result = is_vulnerable(aDomain);
+                        result = is_vulnerable(aDomain)
                         if result is None:
                             sys.stdout.flush()
                             print "no SSL:         %s||" % aDomain
 ##                            self.counter_nossl += 1
                             #counter_nossl += 1
-
+                            sys.stdout.flush()
                         elif result:
                             self.vulnQueue.put(aDomain)
                             sys.stdout.flush()
@@ -221,6 +223,7 @@ class aScanner(threading.Thread):
                                 print Fore.RED, "vulnerable:     %s||" % aDomain
                                 #self.counter_vuln += 1
                                 #counter_vuln += 1
+                            sys.stdout.flush()
                         else:
                             sys.stdout.flush()
                             print "not vulnerable: %s||" % aDomain
@@ -233,10 +236,11 @@ class aScanner(threading.Thread):
                         else:
                             counter += 1
                             #print "DEBUG: noSSL: %i VULN: %i NOTvuln: %i" % (self.counter_nossl, self.counter_vuln, self.counter_notvuln)
-                
+            return    
         except queue.Empty:
             pass
-
+        except KeyboardInterrupt:
+            sys.exit()
         #print
         #print "No SSL: " + str(counter_nossl)
         #print "Vulnerable: " + str(counter_vuln)
@@ -254,19 +258,14 @@ def populate_queue_with_domains_from_file(fileName, theQueue):
                 domain = domain.strip()
                 theQueue.put(domain)
             except ValueError:
-                print "Bad domain! %s" % domain
+                logging.warning("Bad domain! %s" % domain)
 
 def multi_threaded_main(options, args):
     print "|| signifies end of line, hack to deal with multithreaded printing"
-    counter_nossl = 0;
-    counter_notvuln = 0;
-    counter_vuln = 0;
+    counter_nossl = 0
+    counter_notvuln = 0
+    counter_vuln = 0
 
-##
-##    with open(args[0], 'r') as f:
-##        for line in f:
-##            rank, domain = line.split(',')
-##            domain = domain.strip()
     theQueue = queue.Queue()
     vulnQueue = queue.Queue()
     populate_queue_with_domains_from_file(args[0], theQueue)
@@ -275,50 +274,51 @@ def multi_threaded_main(options, args):
     limit = int(args[1])
     [threads.append(aScanner(theQueue, counter_nossl, counter_notvuln, counter_vuln, limit, vulnQueue)) for _ in range(numThreads)]
     [thread.start() for thread in threads]
-    [thread.join() for thread in threads]
+    
     a_plain_old_counter = 0
     vulnerable_domains = []
     try:
         
         while a_plain_old_counter < limit:
-            a_vulnerable_domain = vulnQueue.get()
+            a_vulnerable_domain = vulnQueue.get(timeout=30)
             vulnerable_domains(a_vulnerable_domain)
             a_plain_old_counter += 1
     except queue.Empty:
         pass
-    print "Vulnerable domains:"
+    
     [thread.stopWork() for thread in threads]
-##    try:
-##        while True:
-##            aDomain = theQueue.get(timeout=1)
-##            if aDomain:
-##                print "Testing %s... " % aDomain,
-##                sys.stdout.flush();
-##                result = is_vulnerable(aDomain);
-##                if result is None:
-##                    print "no SSL."
-##                    counter_nossl += 1;
-##                elif result:
-##                    print "vulnerable."
-##                    counter_vuln += 1;
-##                else:
-##                    print "not vulnerable."
-##                    counter_notvuln += 1;
-##
-##                if counter_nossl + counter_vuln + counter_notvuln >= int(args[1]):
-##                    break
-##
-##            
-##    except queue.Empty:
-##        pass
-##
-##
-##    print
-##    print "No SSL: " + str(counter_nossl)
-##    print "Vulnerable: " + str(counter_vuln)
-##    print "Not vulnerable: " + str(counter_notvuln)
+    [thread.join() for thread in threads]
+    print "Vulnerable domains:"
+    print vulnerable_domains
 
 
+def _profile(continuation):
+    prof_file = 'ssl_test.prof'
+    try:
+        import cProfile
+        import pstats
+        print('Profiling using cProfile')
+        cProfile.runctx('continuation()', globals(), locals(), prof_file)
+        stats = pstats.Stats(prof_file)
+    except ImportError:
+        import hotshot
+        import hotshot.stats
+        prof = hotshot.Profile(prof_file, lineevents=1)
+        print('Profiling using hotshot')
+        prof.runcall(continuation)
+        prof.close()
+        stats = hotshot.stats.load(prof_file)
+    stats.strip_dirs()
+    #for a in ['calls', 'cumtime', 'cumulative', 'ncalls', 'time', 'tottime']:
+    for a in ['cumtime', 'time', 'ncalls']:
+        try:
+            stats.sort_stats(a)
+            stats.print_stats(150)
+            stats.print_callees(150)
+            stats.print_callers(150)
+        except KeyError:
+            pass
+    os.remove(prof_file)
 
 
 def main():
@@ -326,10 +326,20 @@ def main():
     if len(args) < 3:
         options.print_help()
         return
-    #logging.basicConfig(level=logging.WARN)
-    logging.basicConfig(level=logging.DEBUG)
+    profile = True
+    #profile = False
+    logging.basicConfig(level=logging.WARN)
+    #logging.basicConfig(level=logging.DEBUG)
     #single_threaded_main(args)
-    multi_threaded_main(opts, args)
+    if profile:
+        try:
+            def safe_main():
+                multi_threaded_main(opts, args)
+            _profile(safe_main)
+        except KeyboardInterrupt:
+            sys.exit()
+    else:
+        multi_threaded_main(opts, args)
 
 if __name__ == '__main__':
     main()
