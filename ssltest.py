@@ -14,6 +14,7 @@ import socket
 import time
 import select
 import re
+import logging
 from optparse import OptionParser
 import Queue as queue
 import threading
@@ -58,7 +59,7 @@ def hexdump(s):
         lin = [c for c in s[b : b + 16]]
         hxdat = ' '.join('%02X' % ord(c) for c in lin)
         pdat = ''.join((c if 32 <= ord(c) <= 126 else '.' )for c in lin)
-        #print '  %04x: %-48s %s' % (b, hxdat, pdat)
+        logging.debug('  %04x: %-48s %s' % (b, hxdat, pdat))
     #print
 
 def recvall(s, length, timeout=5):
@@ -86,14 +87,14 @@ def recvall(s, length, timeout=5):
 def recvmsg(s):
     hdr = recvall(s, 5)
     if hdr is None:
-        #print 'Unexpected EOF receiving record header - server closed connection'
+        logging.debug('Unexpected EOF receiving record header - server closed connection')
         return None, None, None
     typ, ver, ln = struct.unpack('>BHH', hdr)
     pay = recvall(s, ln, 10)
     if pay is None:
-        #print 'Unexpected EOF receiving record payload - server closed connection'
+        logging.debug('Unexpected EOF receiving record payload - server closed connection')
         return None, None, None
-    #print ' ... received message: type = %d, ver = %04x, length = %d' % (typ, ver, len(pay))
+    logging.debug(' ... received message: type = %d, ver = %04x, length = %d' % (typ, ver, len(pay)))
     return typ, ver, pay
 
 def hit_hb(s):
@@ -101,50 +102,50 @@ def hit_hb(s):
     while True:
         typ, ver, pay = recvmsg(s)
         if typ is None:
-            #print 'No heartbeat response received, server likely not vulnerable'
+            logging.debug('No heartbeat response received, server likely not vulnerable')
             return False
 
         if typ == 24:
-            #print 'Received heartbeat response:'
+            logging.debug('Received heartbeat response:')
             hexdump(pay)
             if len(pay) > 3:
-                #print 'WARNING: server returned more data than it should - server is vulnerable!'
+                logging.debug('WARNING: server returned more data than it should - server is vulnerable!')
                 return True
             else:
-                #print 'Server processed malformed heartbeat, but did not return any extra data.'
+                logging.debug('Server processed malformed heartbeat, but did not return any extra data.')
                 return False
 
         if typ == 21:
-            #print 'Received alert:'
+            logging.debug('Received alert:')
             hexdump(pay)
-            #print 'Server returned error, likely not vulnerable'
+            logging.debug('Server returned error, likely not vulnerable')
             return False
 
 def is_vulnerable(domain):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(2)
-    #print 'Connecting...'
-    #sys.stdout.flush()
+    logging.debug('Connecting to %s...' % domain)
+    sys.stdout.flush()
     try:
         s.connect((domain, 443))
     except Exception, e:
         return None
-    #print 'Sending Client Hello...'
-    #sys.stdout.flush()
+    logging.debug('Sending Client Hello to %s...' % domain)
+    sys.stdout.flush()
     s.send(hello)
-    #print 'Waiting for Server Hello...'
-    #sys.stdout.flush()
+    logging.debug('Waiting for Server Hello from %s...' % domain)
+    sys.stdout.flush()
     while True:
         typ, ver, pay = recvmsg(s)
         if typ == None:
-            #print 'Server closed connection without sending Server Hello.'
+            logging.debug('Server (domain: %s) closed connection without sending Server Hello.' % domain)
             return None
         # Look for server hello done message.
         if typ == 22 and ord(pay[0]) == 0x0E:
             break
 
-    #print 'Sending heartbeat request...'
-    #sys.stdout.flush()
+    logging.debug('Sending heartbeat request to %s...' % domain)
+    sys.stdout.flush()
     s.send(hb)
     return hit_hb(s)
 
@@ -189,13 +190,17 @@ class aScanner(threading.Thread):
         #self.counter_vuln  = counter_vuln
         self.limit = limit
         self.vulnQueue = vulnQueue
+        self.do_work = True
+
+    def stopWork(self):
+        self.do_work = False
     def run( self ):
         counter = 0
         try:
-            while True:
+            while self.do_work:
                     aDomain = self.queue_of_domains_to_check.get(timeout=1)
                     if aDomain:
-                        #print "Testing %s... " % aDomain
+                        logging.debug("Testing %s... " % aDomain)
                         sys.stdout.flush()
                         result = is_vulnerable(aDomain);
                         if result is None:
@@ -268,16 +273,21 @@ def multi_threaded_main(options, args):
     threads = []
     numThreads = int(args[2])
     limit = int(args[1])
-    [threads.append(aScanner(theQueue, counter_nossl, counter_notvuln, counter_vuln, limit)) for _ in range(numThreads)]
+    [threads.append(aScanner(theQueue, counter_nossl, counter_notvuln, counter_vuln, limit, vulnQueue)) for _ in range(numThreads)]
     [thread.start() for thread in threads]
     [thread.join() for thread in threads]
+    a_plain_old_counter = 0
+    vulnerable_domains = []
     try:
-        print "Vulnerable domains:"
-        while True:
+        
+        while a_plain_old_counter < limit:
             a_vulnerable_domain = vulnQueue.get()
-            print a_vulnerable_domain
+            vulnerable_domains(a_vulnerable_domain)
+            a_plain_old_counter += 1
     except queue.Empty:
         pass
+    print "Vulnerable domains:"
+    [thread.stopWork() for thread in threads]
 ##    try:
 ##        while True:
 ##            aDomain = theQueue.get(timeout=1)
@@ -316,6 +326,8 @@ def main():
     if len(args) < 3:
         options.print_help()
         return
+    #logging.basicConfig(level=logging.WARN)
+    logging.basicConfig(level=logging.DEBUG)
     #single_threaded_main(args)
     multi_threaded_main(opts, args)
 
